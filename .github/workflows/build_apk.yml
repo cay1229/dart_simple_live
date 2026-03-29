@@ -2,20 +2,21 @@ name: Build Android APK
 
 on:
   push:
-    branches:
-      - master  # 或者你想要触发编译的分支名
-  workflow_dispatch: # 允许手动触发
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch: # 支持手动点击运行
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 检出代码
+      # 1. 拉取代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. 设置 Java 环境 (Flutter Android 编译需要)
+      # 2. 设置 Java 环境 (使用 JDK 17 适配最新的 Flutter/Gradle)
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -30,27 +31,40 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # 4. 获取依赖 (注意：该项目有多个子文件夹)
+      # 4. 关键步骤：处理多项目依赖
+      # dart_simple_live 结构特殊，必须先 pub get 核心库，再 pub get APP
       - name: Install dependencies
         run: |
-          # 进入核心库安装依赖
           cd simple_live_core
           flutter pub get
-          cd ..
-          # 进入 APP 文件夹安装依赖
-          cd simple_live_app
+          cd ../simple_live_app
           flutter pub get
 
       # 5. 编译 APK
+      # 通过 env 注入环境变量，解决 build.gradle.kts 中的强制非空类型转换错误 (null as String)
       - name: Build APK
+        env:
+          # 以下变量对应项目 build.gradle.kts 中预期的签名配置项
+          # 即使不签名，也需要传一个空字符串防止 Kotlin 报错
+          KEY_PATH: ""
+          KEY_PASSWORD: ""
+          ALIAS: ""
+          ALIAS_PASSWORD: ""
         run: |
           cd simple_live_app
-          # 编译 Release 版本，--split-per-abi 可以减小单个包体积
-          flutter build apk --release --split-per-abi
+          # 使用 --split-per-abi 可以生成针对不同架构(arm64, v7a)的小体积包
+          flutter build apk --release --split-per-abi --no-tree-shake-icons
 
-      # 6. 上传编译产物到 GitHub Actions 页面
+      # 6. 整理并命名产物
+      - name: Prepare Artifacts
+        run: |
+          mkdir -p release-apks
+          cp simple_live_app/build/app/outputs/flutter-apk/*.apk release-apks/
+
+      # 7. 上传编译好的 APK 到 GitHub Actions 界面
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: simple_live_app/build/app/outputs/flutter-apk/*.apk
+          name: simple-live-apks
+          path: release-apks/*.apk
+          retention-days: 7 # 文件保留7天
